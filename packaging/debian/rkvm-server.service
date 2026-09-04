@@ -1,0 +1,18 @@
+[Unit]
+Description=rkvm keyboard and mouse sharing server
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/rkvm/server.toml
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/rkvm-server /etc/rkvm/server.toml
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGINT
+TimeoutStopSec=10
+UMask=0077
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

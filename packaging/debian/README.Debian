@@ -1,0 +1,24 @@
+rkvm-server for Debian
+======================
+
+The package deliberately does not enable or start rkvm-server on first install.
+The server grabs physical input devices, so an incorrect configuration can leave
+the local display without usable keyboard or mouse input.
+
+Initial setup:
+
+  sudo install -d -m 0700 /etc/rkvm
+  sudo cp /usr/share/doc/rkvm-server/examples/server.toml /etc/rkvm/server.toml
+  sudo rkvm-certificate-gen /etc/rkvm/certificate.pem /etc/rkvm/key.pem \
+      --ip-addresses 192.0.2.10 --days 3650
+  sudo chmod 0600 /etc/rkvm/server.toml /etc/rkvm/key.pem
+
+Replace 192.0.2.10 with the server address used by clients and replace the
+example password in server.toml with a long random value. Test the configuration
+before enabling the service:
+
+  sudo rkvm-server /etc/rkvm/server.toml --shutdown-after 15
+  sudo systemctl enable --now rkvm-server.service
+
+The example uses left Alt plus left Ctrl to switch destinations. Package removal
+does not delete /etc/rkvm, its private key, certificate, or configuration.

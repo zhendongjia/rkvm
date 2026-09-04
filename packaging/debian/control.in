@@ -1,0 +1,14 @@
+Package: rkvm-server
+Version: @VERSION@
+Section: net
+Priority: optional
+Architecture: amd64
+Maintainer: Zhendong Jia <jzd@sunsite.net.cn>
+Installed-Size: @INSTALLED_SIZE@
+Depends: libc6, libevdev2, libgcc-s1, openssl
+Recommends: systemd
+Homepage: https://github.com/zhendongjia/rkvm
+Description: network KVM server using Linux evdev and uinput
+ rkvm captures keyboard and mouse events on a Linux server and forwards them
+ over an authenticated TLS connection. This package contains the server,
+ certificate generator, systemd unit, and an example configuration.

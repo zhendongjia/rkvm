@@ -1,0 +1,19 @@
+#!/bin/sh
+set -e
+
+install -d -m 0700 /etc/rkvm
+
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload || true
+    if systemctl is-enabled --quiet rkvm-server.service 2>/dev/null; then
+        systemctl try-restart rkvm-server.service || true
+    fi
+fi
+
+if [ ! -f /etc/rkvm/server.toml ]; then
+    echo "rkvm-server installed but not enabled."
+    echo "Copy /usr/share/doc/rkvm-server/examples/server.toml to /etc/rkvm/,"
+    echo "create a certificate and key, change the shared password, then enable the service."
+fi
+
+exit 0
