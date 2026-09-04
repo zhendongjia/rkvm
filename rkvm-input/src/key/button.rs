@@ -1,4 +1,6 @@
+#[cfg(target_os = "linux")]
 use crate::convert::Convert;
+#[cfg(target_os = "linux")]
 use crate::glue;
 
 use serde::{Deserialize, Serialize};
@@ -115,6 +117,7 @@ pub enum Button {
     TriggerHappy40,
 }
 
+#[cfg(target_os = "linux")]
 impl Convert for Button {
     type Raw = u16;
 

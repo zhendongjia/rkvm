@@ -7,6 +7,8 @@ use std::path::PathBuf;
 const RKVM_HAVE_ABS_PROFILE: &[u8] = b"RKVM_HAVE_ABS_PROFILE";
 
 fn main() {
+    println!("cargo:rustc-check-cfg=cfg(have_abs_profile)");
+
     match env::var("CARGO_CFG_TARGET_OS").unwrap().as_str() {
         "windows" => return,
         "linux" => {}

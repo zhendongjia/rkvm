@@ -1,4 +1,7 @@
+#[cfg(target_os = "linux")]
 use crate::convert::Convert;
+
+#[cfg(target_os = "linux")]
 use crate::glue;
 
 use serde::{Deserialize, Serialize};
@@ -54,6 +57,7 @@ pub enum AbsAxis {
     MtToolY,
 }
 
+#[cfg(target_os = "linux")]
 impl Convert for AbsAxis {
     type Raw = u16;
 
@@ -177,6 +181,7 @@ pub enum ToolType {
     Dial,
 }
 
+#[cfg(target_os = "linux")]
 impl Convert for ToolType {
     type Raw = i32;
 

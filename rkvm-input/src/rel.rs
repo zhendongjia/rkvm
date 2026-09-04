@@ -1,4 +1,7 @@
+#[cfg(target_os = "linux")]
 use crate::convert::Convert;
+
+#[cfg(target_os = "linux")]
 use crate::glue;
 
 use serde::{Deserialize, Serialize};
@@ -25,6 +28,7 @@ pub enum RelAxis {
     HWheelHiRes,
 }
 
+#[cfg(target_os = "linux")]
 impl Convert for RelAxis {
     type Raw = u16;
 

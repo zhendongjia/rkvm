@@ -4,6 +4,7 @@ mod keyboard;
 pub use button::Button;
 pub use keyboard::Keyboard;
 
+#[cfg(target_os = "linux")]
 use crate::convert::Convert;
 
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,7 @@ pub enum Key {
     Button(Button),
 }
 
+#[cfg(target_os = "linux")]
 impl Convert for Key {
     type Raw = u16;
 

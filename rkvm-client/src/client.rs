@@ -1,3 +1,4 @@
+use crate::updates::{self, Repeater};
 use rkvm_input::writer::Writer;
 use rkvm_net::auth::{AuthChallenge, AuthStatus};
 use rkvm_net::message::Message;
@@ -6,6 +7,8 @@ use rkvm_net::{Pong, Update};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::io;
+#[cfg(target_os = "windows")]
+use std::time::Duration;
 use std::time::Instant;
 use thiserror::Error;
 use tokio::io::{AsyncWriteExt, BufStream};
@@ -13,6 +16,105 @@ use tokio::net::TcpStream;
 use tokio::time;
 use tokio_rustls::rustls::ServerName;
 use tokio_rustls::TlsConnector;
+
+struct Writers {
+    devices: HashMap<usize, Writer>,
+    #[cfg(target_os = "windows")]
+    errors: InputErrorReporter,
+}
+
+impl Writers {
+    fn new() -> Self {
+        Self {
+            devices: HashMap::new(),
+            #[cfg(target_os = "windows")]
+            errors: InputErrorReporter::default(),
+        }
+    }
+
+    async fn write(&mut self, id: usize, event: &rkvm_input::event::Event) -> Result<(), Error> {
+        let result = self
+            .devices
+            .get_mut(&id)
+            .ok_or_else(|| {
+                Error::Network(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Server sent an event to a nonexistent device",
+                ))
+            })?
+            .write(event)
+            .await;
+
+        match result {
+            Ok(()) => Ok(()),
+            #[cfg(target_os = "windows")]
+            Err(err) => {
+                self.errors.report(id, "event", &err);
+                Ok(())
+            }
+            #[cfg(not(target_os = "windows"))]
+            Err(err) => Err(Error::Input(err)),
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Default)]
+struct InputErrorReporter {
+    last_warning: Option<Instant>,
+    suppressed: usize,
+}
+
+#[cfg(target_os = "windows")]
+impl InputErrorReporter {
+    fn report(&mut self, id: usize, operation: &'static str, err: &io::Error) {
+        let now = Instant::now();
+        if self
+            .last_warning
+            .is_some_and(|last| now.duration_since(last) < Duration::from_secs(1))
+        {
+            self.suppressed += 1;
+            return;
+        }
+
+        let suppressed = std::mem::take(&mut self.suppressed);
+        self.last_warning = Some(now);
+        tracing::warn!(
+            id,
+            operation,
+            suppressed,
+            error = %err,
+            "Windows rejected remote input; keeping the server connection alive"
+        );
+    }
+}
+
+impl Repeater for Writers {
+    fn deadline(&self) -> Option<Instant> {
+        #[cfg(target_os = "windows")]
+        {
+            self.devices.values().filter_map(Writer::next_repeat).min()
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            None
+        }
+    }
+
+    fn repeat(&mut self, now: Instant) -> io::Result<()> {
+        #[cfg(target_os = "windows")]
+        for (id, writer) in &mut self.devices {
+            if let Err(err) = writer.repeat(now) {
+                self.errors.report(*id, "repeat", &err);
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = now;
+        }
+        Ok(())
+    }
+}
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -102,16 +204,18 @@ pub async fn run(
     let mut start = Instant::now();
 
     let mut interval = time::interval(rkvm_net::PING_INTERVAL + rkvm_net::READ_TIMEOUT);
-    let mut writers = HashMap::new();
+    let mut writers = Writers::new();
 
     // Interval ticks immediately after creation.
     interval.tick().await;
 
     loop {
-        let update = tokio::select! {
-            update = Update::decode(&mut stream) => update.map_err(Error::Network)?,
-            _ = interval.tick() => return Err(Error::Network(io::Error::new(io::ErrorKind::TimedOut, "Ping timed out"))),
-        };
+        let update = updates::receive(&mut stream, &mut interval, &mut writers)
+            .await
+            .map_err(|err| match err {
+                updates::ReceiveError::Network(err) => Error::Network(err),
+                updates::ReceiveError::Input(err) => Error::Input(err),
+            })?;
 
         match update {
             Update::CreateDevice {
@@ -126,7 +230,7 @@ pub async fn run(
                 delay,
                 period,
             } => {
-                let entry = writers.entry(id);
+                let entry = writers.devices.entry(id);
                 if let Entry::Occupied(_) = entry {
                     return Err(Error::Network(io::Error::new(
                         io::ErrorKind::InvalidData,
@@ -163,7 +267,7 @@ pub async fn run(
                 );
             }
             Update::DestroyDevice { id } => {
-                if writers.remove(&id).is_none() {
+                if writers.devices.remove(&id).is_none() {
                     return Err(Error::Network(io::Error::new(
                         io::ErrorKind::InvalidData,
                         "Server destroyed a nonexistent device",
@@ -173,14 +277,7 @@ pub async fn run(
                 tracing::info!(id = %id, "Destroyed device");
             }
             Update::Event { id, event } => {
-                let writer = writers.get_mut(&id).ok_or_else(|| {
-                    Error::Network(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "Server sent an event to a nonexistent device",
-                    ))
-                })?;
-
-                writer.write(&event).await.map_err(Error::Input)?;
+                writers.write(id, &event).await?;
 
                 tracing::trace!(id = %id, "Wrote an event to device");
             }

@@ -1,19 +1,35 @@
+#[cfg(target_os = "linux")]
 mod config;
+#[cfg(any(target_os = "linux", test))]
+mod held_inputs;
+#[cfg(target_os = "linux")]
 mod server;
+#[cfg(target_os = "linux")]
 mod tls;
 
+#[cfg(target_os = "linux")]
 use clap::Parser;
+#[cfg(target_os = "linux")]
 use config::Config;
+#[cfg(target_os = "linux")]
 use std::future;
+#[cfg(target_os = "linux")]
 use std::path::PathBuf;
 use std::process::ExitCode;
+#[cfg(target_os = "linux")]
 use std::time::Duration;
+#[cfg(target_os = "linux")]
 use tokio::{fs, signal, time};
+#[cfg(target_os = "linux")]
 use tracing::subscriber;
+#[cfg(target_os = "linux")]
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
+#[cfg(target_os = "linux")]
 use tracing_subscriber::fmt;
+#[cfg(target_os = "linux")]
 use tracing_subscriber::prelude::*;
 
+#[cfg(target_os = "linux")]
 #[derive(Parser)]
 #[structopt(name = "rkvm-server", about = "The rkvm server application")]
 struct Args {
@@ -23,6 +39,7 @@ struct Args {
     shutdown_after: Option<u64>,
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::main]
 async fn main() -> ExitCode {
     let filter = EnvFilter::builder()
@@ -92,4 +109,10 @@ async fn main() -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+#[cfg(target_os = "windows")]
+fn main() -> ExitCode {
+    eprintln!("rkvm-server is only supported on Linux");
+    ExitCode::FAILURE
 }

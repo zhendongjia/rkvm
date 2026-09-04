@@ -6,6 +6,21 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build
+      run: cargo build --workspace --release --locked --verbose
+    - name: Run tests
+      run: cargo test --workspace --verbose
+    - name: Upload Windows client
+      uses: actions/upload-artifact@v4
+      with:
+        name: rkvm-client-windows
+        path: target/release/rkvm-client.exe
+
   ubuntu:
     runs-on: ubuntu-latest
 

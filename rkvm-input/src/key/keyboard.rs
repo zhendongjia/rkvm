@@ -1,4 +1,6 @@
+#[cfg(target_os = "linux")]
 use crate::convert::Convert;
+#[cfg(target_os = "linux")]
 use crate::glue;
 
 use serde::{Deserialize, Serialize};
@@ -489,6 +491,7 @@ pub enum Keyboard {
     ZoomReset,
 }
 
+#[cfg(target_os = "linux")]
 impl Convert for Keyboard {
     type Raw = u16;
 
