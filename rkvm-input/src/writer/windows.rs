@@ -19,9 +19,11 @@ const VIRTUAL_HID_PATH: &str = r"\\.\RkvmVirtualHid";
 const KEYBOARD_REPORT_ID: u8 = 1;
 const MOUSE_REPORT_ID: u8 = 2;
 const CONSUMER_REPORT_ID: u8 = 3;
+const SYSTEM_REPORT_ID: u8 = 4;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum NativeKey {
+    SystemPower,
     Keyboard {
         scan_code: u16,
         extended: bool,
@@ -36,6 +38,7 @@ enum NativeKey {
 
 fn native_key(key: Key) -> Option<NativeKey> {
     match key {
+        Key::Key(KeyboardKey::Power) => Some(NativeKey::SystemPower),
         Key::Key(key) => {
             let consumer = match key {
                 KeyboardKey::Mute => Some((winuser::VK_VOLUME_MUTE, 0x01)),
@@ -72,7 +75,8 @@ fn repeatable(key: Key) -> bool {
         Key::Key(VolumeDown | VolumeUp) => true,
         Key::Key(
             LeftCtrl | RightCtrl | LeftShift | RightShift | LeftAlt | RightAlt | LeftMeta
-            | RightMeta | CapsLock | NumLock | ScrollLock | Appselect | ContextMenu | Menu | Mute,
+            | RightMeta | CapsLock | NumLock | ScrollLock | Appselect | ContextMenu | Menu | Mute
+            | Power,
         ) => false,
         Key::Key(key) => scan_code(key).is_some(),
     }
@@ -108,8 +112,12 @@ impl InputSink for WindowsSink {
         if let Some(virtual_hid) = self.virtual_hid.as_mut() {
             return virtual_hid.key(key, down);
         }
-        let mut input = key_input(key, down);
-        write_raw(std::slice::from_mut(&mut input))
+        if let Some(mut input) = key_input(key, down) {
+            write_raw(std::slice::from_mut(&mut input))?;
+        } else if down {
+            tracing::warn!("The Power key requires the rkvm virtual HID driver");
+        }
+        Ok(())
     }
 
     fn relative(&mut self, axis: RelAxis, value: i32) -> Result<(), Error> {
@@ -152,6 +160,7 @@ impl VirtualHid {
 
     fn key(&mut self, key: NativeKey, down: bool) -> Result<(), Error> {
         match key {
+            NativeKey::SystemPower => self.submit(&[SYSTEM_REPORT_ID, u8::from(down)]),
             NativeKey::Keyboard { hid_usage, .. } => self.keyboard(hid_usage, down),
             NativeKey::Consumer { mask, .. } => self.consumer(mask, down),
             NativeKey::Mouse(button) => self.mouse_button(button, down),
@@ -342,8 +351,11 @@ fn relative_input(axis: RelAxis, value: i32) -> Option<INPUT> {
     Some(mouse_input(dx, dy, mouse_data, flags))
 }
 
-fn key_input(key: NativeKey, down: bool) -> INPUT {
-    match key {
+fn key_input(key: NativeKey, down: bool) -> Option<INPUT> {
+    Some(match key {
+        // Power is a system-control HID usage, not a SendInput virtual key.
+        // Let the physical-button power policy handle it through the driver.
+        NativeKey::SystemPower => return None,
         NativeKey::Consumer { virtual_key, .. } => {
             let mut input = unsafe { std::mem::zeroed::<INPUT>() };
             unsafe {
@@ -386,7 +398,7 @@ fn key_input(key: NativeKey, down: bool) -> INPUT {
             let (flags, mouse_data) = mouse_button(button, down).expect("normalized mouse button");
             mouse_input(0, 0, mouse_data, flags)
         }
-    }
+    })
 }
 
 fn mouse_button(button: Button, down: bool) -> Option<(u32, u32)> {
@@ -761,6 +773,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn power_hid_report_uses_system_control_instead_of_keyboard_or_volume() {
+        use std::io::{Read, Seek, SeekFrom};
+        let path = std::env::temp_dir().join(format!(
+            "rkvm-power-test-{}-{}.bin",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        let mut hid = VirtualHid {
+            file,
+            modifiers: 0,
+            keys: [0; 6],
+            buttons: 0,
+            consumer_buttons: 0,
+        };
+        let power = native_key(Key::Key(KeyboardKey::Power)).expect("power mapping");
+        hid.key(power, true).unwrap();
+        hid.key(power, false).unwrap();
+        hid.file.seek(SeekFrom::Start(0)).unwrap();
+        let mut reports = Vec::new();
+        hid.file.read_to_end(&mut reports).unwrap();
+        drop(hid);
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(reports, [4, 1, 4, 0]);
+    }
+
+    #[test]
+    fn power_does_not_inject_an_unrelated_virtual_key_without_a_driver() {
+        let power = native_key(Key::Key(KeyboardKey::Power)).unwrap();
+        assert!(key_input(power, true).is_none());
+        assert!(key_input(power, false).is_none());
+    }
+
+    #[test]
     fn volume_keys_produce_windows_virtual_key_press_and_release() {
         for (key, expected_vk) in [
             (KeyboardKey::Mute, 0xad),
@@ -769,7 +823,7 @@ mod tests {
         ] {
             let native = native_key(Key::Key(key)).expect("volume key must not be dropped");
             for (down, expected_flags) in [(true, 0), (false, winuser::KEYEVENTF_KEYUP)] {
-                let input = key_input(native, down);
+                let input = key_input(native, down).unwrap();
                 assert_eq!(input.type_, winuser::INPUT_KEYBOARD);
                 let keyboard = unsafe { input.u.ki() };
                 assert_eq!(keyboard.wVk, expected_vk);
@@ -848,7 +902,7 @@ mod tests {
     #[test]
     fn release_preserves_extended_scan_code_and_mouse_button_identity() {
         let key = native_key(Key::Key(KeyboardKey::RightCtrl)).unwrap();
-        let release = key_input(key, false);
+        let release = key_input(key, false).unwrap();
         let keyboard = unsafe { release.u.ki() };
         assert_eq!(keyboard.wScan, 0x1d);
         assert_eq!(
@@ -856,7 +910,7 @@ mod tests {
             winuser::KEYEVENTF_SCANCODE | winuser::KEYEVENTF_EXTENDEDKEY | winuser::KEYEVENTF_KEYUP
         );
         assert_ne!(key, native_key(Key::Key(KeyboardKey::LeftCtrl)).unwrap());
-        let release = key_input(native_key(Key::Button(Button::Back)).unwrap(), false);
+        let release = key_input(native_key(Key::Button(Button::Back)).unwrap(), false).unwrap();
         let mouse = unsafe { release.u.mi() };
         assert_eq!(mouse.dwFlags, winuser::MOUSEEVENTF_XUP);
         assert_eq!(mouse.mouseData, u32::from(winuser::XBUTTON1));

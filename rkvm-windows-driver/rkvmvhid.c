@@ -6,9 +6,11 @@
 #define RKVM_KEYBOARD_REPORT_ID 1
 #define RKVM_MOUSE_REPORT_ID 2
 #define RKVM_CONSUMER_REPORT_ID 3
+#define RKVM_SYSTEM_REPORT_ID 4
 #define RKVM_KEYBOARD_REPORT_SIZE 9
 #define RKVM_MOUSE_REPORT_SIZE 6
 #define RKVM_CONSUMER_REPORT_SIZE 2
+#define RKVM_SYSTEM_REPORT_SIZE 2
 
 DRIVER_INITIALIZE DriverEntry;
 EVT_WDF_DRIVER_DEVICE_ADD RkvmEvtDeviceAdd;
@@ -122,6 +124,23 @@ static UCHAR RkvmReportDescriptor[] = {
     0x95, 0x01,
     0x81, 0x03,       // Input (Constant)
     0xC0,
+
+    // Standard power button, report ID 4. Windows applies the user's power
+    // button policy; the client does not issue shutdown or suspend commands.
+    0x05, 0x01,       // Usage Page (Generic Desktop)
+    0x09, 0x80,       // Usage (System Control)
+    0xA1, 0x01,       // Collection (Application)
+    0x85, RKVM_SYSTEM_REPORT_ID,
+    0x09, 0x81,       // Usage (System Power Down)
+    0x15, 0x00,
+    0x25, 0x01,
+    0x75, 0x01,
+    0x95, 0x01,
+    0x81, 0x02,       // Input (Data, Variable, Absolute)
+    0x75, 0x07,
+    0x95, 0x01,
+    0x81, 0x03,       // Input (Constant)
+    0xC0,
 };
 
 static BOOLEAN RkvmValidReport(_In_reads_bytes_(Length) const UCHAR *Report, size_t Length)
@@ -133,6 +152,9 @@ static BOOLEAN RkvmValidReport(_In_reads_bytes_(Length) const UCHAR *Report, siz
         return TRUE;
     }
     if (Length == RKVM_CONSUMER_REPORT_SIZE && Report[0] == RKVM_CONSUMER_REPORT_ID) {
+        return TRUE;
+    }
+    if (Length == RKVM_SYSTEM_REPORT_SIZE && Report[0] == RKVM_SYSTEM_REPORT_ID) {
         return TRUE;
     }
     return FALSE;
@@ -266,11 +288,13 @@ VOID RkvmEvtFileCleanup(_In_ WDFFILEOBJECT FileObject)
     UCHAR keyboardNeutral[RKVM_KEYBOARD_REPORT_SIZE] = {RKVM_KEYBOARD_REPORT_ID};
     UCHAR mouseNeutral[RKVM_MOUSE_REPORT_SIZE] = {RKVM_MOUSE_REPORT_ID};
     UCHAR consumerNeutral[RKVM_CONSUMER_REPORT_SIZE] = {RKVM_CONSUMER_REPORT_ID};
+    UCHAR systemNeutral[RKVM_SYSTEM_REPORT_SIZE] = {RKVM_SYSTEM_REPORT_ID};
 
     PAGED_CODE();
     (void)RkvmSubmitReport(context, keyboardNeutral, sizeof(keyboardNeutral));
     (void)RkvmSubmitReport(context, mouseNeutral, sizeof(mouseNeutral));
     (void)RkvmSubmitReport(context, consumerNeutral, sizeof(consumerNeutral));
+    (void)RkvmSubmitReport(context, systemNeutral, sizeof(systemNeutral));
 }
 
 VOID RkvmEvtIoWrite(

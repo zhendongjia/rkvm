@@ -323,6 +323,27 @@ mod tests {
     }
 
     #[test]
+    fn power_is_forwarded_once_without_repeat_and_released_on_disconnect() {
+        let (mut device, shared) = setup();
+        let now = Instant::now();
+        device.write(&keyboard(Keyboard::Power, true), now).unwrap();
+        assert_eq!(lock(&shared).sink.events.len(), 1, "power was dropped");
+        device.write(&keyboard(Keyboard::Power, true), now).unwrap();
+        assert_eq!(device.next_repeat(), None);
+        device.repeat(now + Duration::from_secs(10)).unwrap();
+        assert_eq!(lock(&shared).sink.events.len(), 1);
+        drop(device);
+        assert_eq!(
+            lock(&shared).sink.events,
+            vec![
+                (native(Keyboard::Power), true),
+                (native(Keyboard::Power), false)
+            ]
+        );
+        assert!(lock(&shared).owners.is_empty());
+    }
+
+    #[test]
     fn volume_keys_repeat_and_release_when_device_disconnects() {
         for key in [Keyboard::VolumeDown, Keyboard::VolumeUp] {
             let (mut device, shared) = setup();
