@@ -3,7 +3,7 @@ Signature="$WINDOWS NT$"
 Class=System
 ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
 Provider=%ProviderName%
-DriverVer=09/04/2026,0.1.0.0
+DriverVer=09/19/2026,0.1.1.0
 CatalogFile=rkvmvhid.cat
 PnpLockdown=1
 

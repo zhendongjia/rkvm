@@ -7,7 +7,13 @@ administrators.
 
 The build is pinned to Microsoft's WDK NuGet package in `packages.config`.
 Restore it with `nuget restore -PackagesDirectory packages`, then build
-`rkvmvhid.vcxproj` with MSBuild for `Release|x64`.
+`rkvmvhid.vcxproj` with the 64-bit MSBuild executable (`Bin/amd64/MSBuild.exe`)
+for `Release|x64`; the pinned WDK includes 64-bit INF verification tools.
+
+The driver also exposes Consumer Control volume-up, volume-down, and mute
+buttons. Upgrade the client and driver together for these controls: the older
+driver accepts only keyboard and mouse reports. Held volume keys repeat; mute
+does not. Closing the client handle releases all three report collections.
 
 Development builds are test drivers. Installing one requires Windows test
 signing and a reboot; do not change Secure Boot, BitLocker, or boot settings

@@ -18,6 +18,7 @@ const WHEEL_DELTA: i32 = 120;
 const VIRTUAL_HID_PATH: &str = r"\\.\RkvmVirtualHid";
 const KEYBOARD_REPORT_ID: u8 = 1;
 const MOUSE_REPORT_ID: u8 = 2;
+const CONSUMER_REPORT_ID: u8 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum NativeKey {
@@ -26,12 +27,28 @@ enum NativeKey {
         extended: bool,
         hid_usage: u8,
     },
+    Consumer {
+        virtual_key: u16,
+        mask: u8,
+    },
     Mouse(Button),
 }
 
 fn native_key(key: Key) -> Option<NativeKey> {
     match key {
         Key::Key(key) => {
+            let consumer = match key {
+                KeyboardKey::Mute => Some((winuser::VK_VOLUME_MUTE, 0x01)),
+                KeyboardKey::VolumeDown => Some((winuser::VK_VOLUME_DOWN, 0x02)),
+                KeyboardKey::VolumeUp => Some((winuser::VK_VOLUME_UP, 0x04)),
+                _ => None,
+            };
+            if let Some((virtual_key, mask)) = consumer {
+                return Some(NativeKey::Consumer {
+                    virtual_key: virtual_key as u16,
+                    mask,
+                });
+            }
             let (scan_code, extended) = scan_code(key)?;
             Some(NativeKey::Keyboard {
                 scan_code,
@@ -52,9 +69,10 @@ fn repeatable(key: Key) -> bool {
     use KeyboardKey::*;
     match key {
         Key::Button(_) => false,
+        Key::Key(VolumeDown | VolumeUp) => true,
         Key::Key(
             LeftCtrl | RightCtrl | LeftShift | RightShift | LeftAlt | RightAlt | LeftMeta
-            | RightMeta | CapsLock | NumLock | ScrollLock | Appselect | ContextMenu | Menu,
+            | RightMeta | CapsLock | NumLock | ScrollLock | Appselect | ContextMenu | Menu | Mute,
         ) => false,
         Key::Key(key) => scan_code(key).is_some(),
     }
@@ -114,6 +132,7 @@ struct VirtualHid {
     modifiers: u8,
     keys: [u8; 6],
     buttons: u8,
+    consumer_buttons: u8,
 }
 
 impl VirtualHid {
@@ -123,6 +142,7 @@ impl VirtualHid {
             modifiers: 0,
             keys: [0; 6],
             buttons: 0,
+            consumer_buttons: 0,
         })
     }
 
@@ -133,8 +153,23 @@ impl VirtualHid {
     fn key(&mut self, key: NativeKey, down: bool) -> Result<(), Error> {
         match key {
             NativeKey::Keyboard { hid_usage, .. } => self.keyboard(hid_usage, down),
+            NativeKey::Consumer { mask, .. } => self.consumer(mask, down),
             NativeKey::Mouse(button) => self.mouse_button(button, down),
         }
+    }
+
+    fn consumer(&mut self, mask: u8, down: bool) -> Result<(), Error> {
+        let released = self.consumer_buttons & !mask;
+        // A repeated identical HID state is not another press. Pulse only this
+        // control so holding volume repeats without toggling a held mute key.
+        if down && self.consumer_buttons & mask != 0 {
+            self.submit(&[CONSUMER_REPORT_ID, released])?;
+            self.consumer_buttons = released;
+        }
+        let buttons = if down { released | mask } else { released };
+        self.submit(&[CONSUMER_REPORT_ID, buttons])?;
+        self.consumer_buttons = buttons;
+        Ok(())
     }
 
     fn keyboard(&mut self, usage: u8, down: bool) -> Result<(), Error> {
@@ -309,6 +344,20 @@ fn relative_input(axis: RelAxis, value: i32) -> Option<INPUT> {
 
 fn key_input(key: NativeKey, down: bool) -> INPUT {
     match key {
+        NativeKey::Consumer { virtual_key, .. } => {
+            let mut input = unsafe { std::mem::zeroed::<INPUT>() };
+            unsafe {
+                *input.u.ki_mut() = KEYBDINPUT {
+                    wVk: virtual_key,
+                    wScan: 0,
+                    dwFlags: if down { 0 } else { winuser::KEYEVENTF_KEYUP },
+                    time: 0,
+                    dwExtraInfo: 0,
+                };
+            }
+            input.type_ = winuser::INPUT_KEYBOARD;
+            input
+        }
         NativeKey::Keyboard {
             scan_code,
             extended,
@@ -710,6 +759,65 @@ fn hid_usage(key: KeyboardKey) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn volume_keys_produce_windows_virtual_key_press_and_release() {
+        for (key, expected_vk) in [
+            (KeyboardKey::Mute, 0xad),
+            (KeyboardKey::VolumeDown, 0xae),
+            (KeyboardKey::VolumeUp, 0xaf),
+        ] {
+            let native = native_key(Key::Key(key)).expect("volume key must not be dropped");
+            for (down, expected_flags) in [(true, 0), (false, winuser::KEYEVENTF_KEYUP)] {
+                let input = key_input(native, down);
+                assert_eq!(input.type_, winuser::INPUT_KEYBOARD);
+                let keyboard = unsafe { input.u.ki() };
+                assert_eq!(keyboard.wVk, expected_vk);
+                assert_eq!(keyboard.wScan, 0);
+                assert_eq!(keyboard.dwFlags, expected_flags);
+            }
+        }
+    }
+
+    #[test]
+    fn volume_hid_reports_preserve_other_keys_and_pulse_repeats() {
+        use std::io::{Read, Seek, SeekFrom};
+        let path = std::env::temp_dir().join(format!(
+            "rkvm-volume-test-{}-{}.bin",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        let mut hid = VirtualHid {
+            file,
+            modifiers: 0,
+            keys: [0; 6],
+            buttons: 0,
+            consumer_buttons: 0,
+        };
+        let up = native_key(Key::Key(KeyboardKey::VolumeUp)).expect("volume up mapping");
+        let mute = native_key(Key::Key(KeyboardKey::Mute)).expect("mute mapping");
+        hid.key(up, true).unwrap();
+        hid.key(mute, true).unwrap();
+        hid.key(up, true).unwrap();
+        hid.key(up, false).unwrap();
+        hid.key(mute, false).unwrap();
+        hid.file.seek(SeekFrom::Start(0)).unwrap();
+        let mut reports = Vec::new();
+        hid.file.read_to_end(&mut reports).unwrap();
+        drop(hid);
+        std::fs::remove_file(path).unwrap();
+        // Consumer report ID 3: mute bit 0, volume-down bit 1, volume-up bit 2.
+        assert_eq!(reports, [3, 4, 3, 5, 3, 1, 3, 5, 3, 1, 3, 0]);
+    }
 
     #[test]
     fn maps_standard_keyboard_scancodes() {

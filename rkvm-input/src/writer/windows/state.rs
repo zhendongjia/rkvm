@@ -323,6 +323,43 @@ mod tests {
     }
 
     #[test]
+    fn volume_keys_repeat_and_release_when_device_disconnects() {
+        for key in [Keyboard::VolumeDown, Keyboard::VolumeUp] {
+            let (mut device, shared) = setup();
+            let now = Instant::now();
+            device.write(&keyboard(key, true), now).unwrap();
+            assert_eq!(lock(&shared).sink.events.len(), 1, "{key:?} was dropped");
+            assert_eq!(device.next_repeat(), Some(now + Duration::from_millis(100)));
+            device.repeat(now + Duration::from_millis(100)).unwrap();
+            drop(device);
+            assert_eq!(
+                lock(&shared).sink.events,
+                vec![
+                    (native(key), true),
+                    (native(key), true),
+                    (native(key), false)
+                ]
+            );
+            assert!(lock(&shared).owners.is_empty());
+        }
+    }
+
+    #[test]
+    fn holding_mute_does_not_toggle_repeatedly() {
+        let (mut device, shared) = setup();
+        let now = Instant::now();
+        device.write(&keyboard(Keyboard::Mute, true), now).unwrap();
+        assert_eq!(lock(&shared).sink.events.len(), 1, "mute was dropped");
+        assert_eq!(device.next_repeat(), None);
+        device.repeat(now + Duration::from_secs(1)).unwrap();
+        device.write(&keyboard(Keyboard::Mute, true), now).unwrap();
+        assert_eq!(lock(&shared).sink.events.len(), 1);
+        device.write(&keyboard(Keyboard::Mute, false), now).unwrap();
+        assert_eq!(lock(&shared).sink.events.len(), 2);
+        assert!(!lock(&shared).sink.events[1].1);
+    }
+
+    #[test]
     fn repeat_obeys_delay_period_and_stops_on_release() {
         let (mut device, shared) = setup();
         let now = Instant::now();
