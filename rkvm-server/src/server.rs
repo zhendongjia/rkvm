@@ -827,6 +827,8 @@ async fn client(
     acceptor: TlsAcceptor,
     password: &str,
 ) -> Result<(), ClientError> {
+    // Send input events promptly even when the receiver delays its TCP ACK.
+    stream.set_nodelay(true)?;
     let stream = rkvm_net::timeout(rkvm_net::TLS_TIMEOUT, acceptor.accept(stream)).await?;
     tracing::info!("TLS connected");
 
